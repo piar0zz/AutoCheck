@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>VINЧЕК — проверка автомобиля</title>
+  <meta name="description" content="Бесплатная проверка автомобиля по VIN, номеру кузова или госномеру: история ДТП, пробег, залоги, розыск и другое." />
+  <meta name="theme-color" content="#f5f7fa" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="container">
+
+    <!-- Шапка -->
+    <header class="header">
+      <div class="brand">
+        <span class="brand__mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 12.5l5 5L20 6.5" />
+          </svg>
+        </span>
+        <span class="brand__name">VIN<span class="brand__accent">ЧЕК</span></span>
+      </div>
+      <span class="badge">Бесплатно</span>
+    </header>
+
+    <!-- Главный экран -->
+    <section class="hero" id="hero">
+      <h1 class="hero__title">Узнай историю автомобиля</h1>
+      <p class="hero__subtitle">Проверка автомобиля по VIN, кузову или госномеру в одном месте.</p>
+
+      <form class="form" id="check-form" novalidate>
+        <label class="form__label" for="query">VIN, номер кузова или госномер</label>
+        <input
+          class="form__input"
+          id="query"
+          name="query"
+          type="text"
+          inputmode="text"
+          autocomplete="off"
+          autocapitalize="characters"
+          spellcheck="false"
+          placeholder="Введите VIN, кузов или госномер"
+          aria-describedby="form-hint form-error"
+        />
+        <p class="form__error" id="form-error" role="alert" hidden></p>
+
+        <button class="btn" type="submit" id="submit-btn">
+          <span class="btn__label">Проверить автомобиль</span>
+          <span class="btn__spinner" aria-hidden="true"></span>
+        </button>
+
+        <p class="form__hint" id="form-hint">Без регистрации. Бесплатно.</p>
+      </form>
+    </section>
+
+    <!-- Что можно проверить -->
+    <section class="features" id="features">
+      <h2 class="features__title">Что входит в отчет</h2>
+      <ul class="features__list">
+        <li><span class="tick">✓</span> Пробег и скрутки</li>
+        <li><span class="tick">✓</span> История ДТП</li>
+        <li><span class="tick">✓</span> Залоги</li>
+        <li><span class="tick">✓</span> Лицензии такси</li>
+        <li><span class="tick">✓</span> Владельцы по ПТС</li>
+        <li><span class="tick">✓</span> Ограничения</li>
+        <li><span class="tick">✓</span> Розыск</li>
+        <li><span class="tick">✓</span> Лизинг и арбитраж</li>
+      </ul>
+    </section>
+
+    <!-- Результат проверки -->
+    <section class="result" id="result" hidden aria-live="polite">
+      <!-- Скелетон загрузки -->
+      <div class="skeleton" id="skeleton" hidden>
+        <div class="skeleton__line skeleton__line--sm"></div>
+        <div class="skeleton__line skeleton__line--lg"></div>
+        <div class="skeleton__line"></div>
+        <div class="skeleton__line skeleton__line--md"></div>
+      </div>
+
+      <!-- Отчет -->
+      <div class="report" id="report" hidden>
+        <div class="report__head">
+          <span class="chip chip--warn" id="report-status">Источники не подключены</span>
+          <button class="link" type="button" id="reset-btn">Проверить другой</button>
+        </div>
+
+        <h3 class="report__title">Отчет по запросу</h3>
+        <p class="report__query" id="report-query"></p>
+        <p class="report__meta" id="report-meta"></p>
+
+        <div class="report__alert" id="report-message"></div>
+
+        <ul class="report__checks" id="report-checks"></ul>
+
+        <p class="report__note">
+          Мы не показываем предполагаемые данные. Если источник недоступен — сообщаем об этом прямо.
+        </p>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <p>VINЧЕК — честная проверка автомобиля. Источники подключаются поэтапно.</p>
+    </footer>
+
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
