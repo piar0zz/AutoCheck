@@ -1,5 +1,5 @@
 // ============================================================
-// VINCHECK — Multi-Source Vehicle Check Engine v1.1
+// VINCHECK — Engine v2.0 (Бесплатный тариф)
 // ============================================================
 
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i;
@@ -8,14 +8,14 @@ const PLATE_RE = /^[АВЕКМНОРСТУХABEKMHOPCTYX]\d{3}[АВЕКМНОР�
 const PLATE_NOREGION_RE = /^[АВЕКМНОРСТУХABEKMHOPCTYX]\d{3}[АВЕКМНОРСТУХABEKMHOPCTYX]{2}$/i;
 
 function json(data, status = 200) {
-  return new Response(JSON.stringify(data), { 
-    status, 
-    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } 
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
   });
 }
 
-function normalize(raw) { 
-  return String(raw || '').toUpperCase().replace(/[^A-ZА-Я0-9]/g, ''); 
+function normalize(raw) {
+  return String(raw || '').toUpperCase().replace(/[^A-ZА-Я0-9]/g, '');
 }
 
 function detectType(value) {
@@ -31,26 +31,32 @@ async function cachedFetch(key, ttlSeconds, fetchFn) {
   const cacheKey = new Request(`https://vincheck.internal/cache/${encodeURIComponent(key)}`);
   let response = await cache.match(cacheKey);
   if (response) return response.json();
+
   const data = await fetchFn();
-  await cache.put(cacheKey, new Response(JSON.stringify(data), { 
-    headers: { 'content-type': 'application/json', 'cache-control': `max-age=${ttlSeconds}` } 
+  if (!data) return null;
+
+  await cache.put(cacheKey, new Response(JSON.stringify(data), {
+    headers: { 'content-type': 'application/json', 'cache-control': `max-age=${ttlSeconds}` }
   }));
   return data;
 }
 
 // ============================================================
-// ПРОВАЙДЕР 1: AvtoVinCod (Залоги, Такси, ГИБДД, ЕАИСТО)
+// ПРОВАЙДЕР: AvtoVinCod (Залоги, Такси, ГИБДД, Пробег)
 // ============================================================
 const AvtoVinCodProvider = {
   async checkPledge(query, type, env) {
     const token = env.AVTOVINCOD_TOKEN;
     if (!token) return this.skip('Залог ФНП', 'Токен не настроен');
     const param = type === 'vin' ? 'vin' : type === 'body' ? 'body' : null;
-    if (!param) return this.skip('Залог ФНП', 'Нужен VIN или кузов');
+    if (!param) return this.skip('Залог ФНП', 'Нужен VIN или номер кузова');
 
     try {
       const url = `https://api.avtovincod.ru/pledge?${param}=${encodeURIComponent(query)}`;
-      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` }, signal: AbortSignal.timeout(15000) });
+      const res = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        signal: AbortSignal.timeout(15000)
+      });
       const data = await res.json();
       if (data.active_count > 0) return { name: 'Залог ФНП', status: 'warn', details: `Действующий залог. Записей: ${data.found}`, sourceUrl: 'https://www.reestr-zalogov.ru/' };
       if (data.found > 0) return { name: 'Залог ФНП', status: 'ok', details: `Залог прекращён. Записей: ${data.found}` };
@@ -93,8 +99,7 @@ const AvtoVinCodProvider = {
       if (data.records && data.records.length > 0) {
         const latest = data.records[0];
         return { 
-          name: 'Пробег (ЕАИСТО)', 
-          status: 'ok', 
+          name: 'Пробег (ЕАИСТО)', status: 'ok', 
           details: `Последний пробег: ${latest.car_mileage?.toLocaleString('ru-RU') || '—'} км (ТО от ${latest.date_of_diagnosis || '—'})`,
           sourceUrl: 'https://eaisto.ru/'
         };
@@ -103,57 +108,14 @@ const AvtoVinCodProvider = {
     } catch (e) { return this.skip('Пробег (ЕАИСТО)', `Ошибка: ${e.message}`); }
   },
 
-  skip(name, reason) { return { name, status: 'skip', details: reason, sourceUrl: null }; },
-};
-
-// ============================================================
-// ПРОВАЙДЕР 2: VIN MCP (NHTSA, бесплатно)
-// ============================================================
-const VinMcpProvider = {
-  async checkRecalls(vin) {
-    if (!VIN_RE.test(vin)) return { name: 'Отзывные кампании', status: 'skip', details: 'Только для VIN' };
-    try {
-      const data = await cachedFetch(`vinmcp_${vin}`, 3600, async () => {
-        const res = await fetch(`https://mcp.vin/api/vin/${encodeURIComponent(vin)}/recalls`, { signal: AbortSignal.timeout(15000) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      });
-      const count = data.recalls?.length || 0;
-      if (count > 0) return { name: 'Отзывные кампании', status: 'warn', details: `Найдено: ${count}`, sourceUrl: 'https://www.nhtsa.gov/recalls' };
-      return { name: 'Отзывные кампании', status: 'ok', details: 'Не найдено' };
-    } catch (e) { return { name: 'Отзывные кампании', status: 'skip', details: `Ошибка: ${e.message}` }; }
-  }
-};
-
-// ============================================================
-// ПРОВАЙДЕР 3: ФССП (долги) — через Checko API
-// ============================================================
-// Проверяет долги ВЛАДЕЛЬЦА авто (по ФИО + дате рождения).
-// Для проверки нужен API-ключ Checko (до 50 запросов/день бесплатно).
-// ============================================================
-const FsspProvider = {
-  async checkDebts(env) {
-    const apiKey = env.CHECKO_API_KEY;
-    if (!apiKey) return { 
-      name: 'Долги (ФССП)', 
-      status: 'skip', 
-      details: 'Для проверки долгов требуется API-ключ Checko и данные владельца' 
-    };
-    // В реальном сценарии здесь должен быть запрос к Checko API с ФИО и датой рождения владельца.
-    // Пока возвращаем заглушку, так как в запросе нет персональных данных.
-    return { 
-      name: 'Долги (ФССП)', 
-      status: 'skip', 
-      details: 'Требуются ФИО и дата рождения владельца для проверки в базе ФССП' 
-    };
-  }
+  skip(name, reason) { return { name, status: 'skip', details: reason, sourceUrl: null }; }
 };
 
 // ============================================================
 // ОСНОВНОЙ ОБРАБОТЧИК
 // ============================================================
-export async function onRequestGet() { 
-  return json({ ok: true, status: 'online', version: '1.1.0' }); 
+export async function onRequestGet() {
+  return json({ ok: true, status: 'online', version: '2.0.0' });
 }
 
 export async function onRequestPost({ request, env }) {
@@ -164,21 +126,15 @@ export async function onRequestPost({ request, env }) {
   const type = detectType(normalized);
   if (!type) return json({ ok: false, message: 'Не удалось распознать формат.' }, 422);
 
-  // Запускаем все проверки параллельно
+  // Параллельный запуск всех проверок
   const results = await Promise.allSettled([
     AvtoVinCodProvider.checkPledge(normalized, type, env),
     AvtoVinCodProvider.checkTaxi(normalized, type, env),
     AvtoVinCodProvider.checkGibddHistory(normalized, type, env),
-    AvtoVinCodProvider.checkEaisto(normalized, type, env),
-    VinMcpProvider.checkRecalls(normalized),
-    FsspProvider.checkDebts(env)
+    AvtoVinCodProvider.checkEaisto(normalized, type, env)
   ]);
 
-  const checks = results.map(r => r.status === 'fulfilled' ? r.value : { 
-    name: 'Источник', 
-    status: 'skip', 
-    details: `Сбой: ${r.reason?.message}` 
-  });
+  const checks = results.map(r => r.status === 'fulfilled' ? r.value : { name: 'Источник', status: 'skip', details: `Сбой: ${r.reason?.message || 'неизвестно'}` });
 
   const warnCount = checks.filter(c => c.status === 'warn').length;
   const okCount = checks.filter(c => c.status === 'ok').length;
