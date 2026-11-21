@@ -112,3 +112,12 @@ body {
   .features__list { grid-template-columns: repeat(4, 1fr); }
   .features__list li { flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px; }
 }
+
+/* Карточка автомобиля */
+.vehicle-card {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
