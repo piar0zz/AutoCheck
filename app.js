@@ -15,62 +15,53 @@
   const reportMessage = document.getElementById('report-message');
   const reportChecks = document.getElementById('report-checks');
   const reportStatus = document.getElementById('report-status');
+  
+  // Создаем контейнер для инфы об авто прямо в памяти
+  const vehicleCard = document.createElement('div');
+  vehicleCard.className = 'vehicle-card';
+  vehicleCard.hidden = true;
+  // Вставляем его перед списком проверок
+  reportChecks.parentNode.insertBefore(vehicleCard, reportChecks);
 
-  // Очистка ввода от лишних символов (пробелы, дефисы и т.д.)
-  function normalize(raw) {
-    return String(raw || '').toUpperCase().replace(/[^A-ZА-Я0-9]/g, '');
-  }
-
-  function showError(text) {
-    errorEl.textContent = text;
-    errorEl.hidden = false;
-    input.setAttribute('aria-invalid', 'true');
-  }
-
-  function clearError() {
-    errorEl.hidden = true;
-    errorEl.textContent = '';
-    input.removeAttribute('aria-invalid');
-  }
-
+  function normalize(raw) { return String(raw || '').toUpperCase().replace(/[^A-ZА-Я0-9]/g, ''); }
+  function showError(text) { errorEl.textContent = text; errorEl.hidden = false; }
+  function clearError() { errorEl.hidden = true; errorEl.textContent = ''; }
   function setLoading(on) {
     submitBtn.disabled = on;
     submitBtn.classList.toggle('is-loading', on);
     submitBtn.querySelector('.btn__label').textContent = on ? 'Проверяем базы…' : 'Проверить автомобиль';
   }
-
   function formatDate(iso) {
-    try {
-      return new Date(iso).toLocaleString('ru-RU', { 
-        day: 'numeric', 
-        month: 'long', 
-        year: 'numeric', 
-        hour: '2-digit', 
-        minute: '2-digit' 
-      });
-    } catch { 
-      return iso; 
-    }
+    try { return new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } 
+    catch { return iso; }
   }
 
-  // Отрисовка списка проверок
-  function renderChecks(checks) {
-    reportChecks.innerHTML = '';
-    
-    // Если бэкенд вернул ошибку или пустой массив
-    if (!checks || !Array.isArray(checks)) {
-      const li = document.createElement('li');
-      li.textContent = 'Не удалось получить список проверок.';
-      reportChecks.appendChild(li);
+  function renderVehicle(vehicle) {
+    if (!vehicle) {
+      vehicleCard.hidden = true;
       return;
     }
+    const mark = vehicle.mark || '—';
+    const model = vehicle.model || '—';
+    const year = vehicle.year || '—';
+    const vin = vehicle.vin ? `<br><small style="color:var(--muted)">VIN: ${vehicle.vin}</small>` : '';
+    
+    vehicleCard.innerHTML = `
+      <div style="font-size: 18px; font-weight: 700; margin-bottom: 4px;">${mark} ${model}</div>
+      <div style="font-size: 14px; color: var(--muted);">${year} год ${vin}</div>
+    `;
+    vehicleCard.hidden = false;
+  }
+
+  function renderChecks(checks) {
+    reportChecks.innerHTML = '';
+    if (!checks || !Array.isArray(checks)) return;
 
     checks.forEach((check) => {
       const li = document.createElement('li');
       const nameWrap = document.createElement('div');
       nameWrap.className = 'check__name';
 
-      // Иконка статуса
       const icon = document.createElement('span');
       icon.className = 'check__icon';
       icon.textContent = check.status === 'ok' ? '✓' : check.status === 'warn' ? '!' : '—';
@@ -79,7 +70,6 @@
       label.textContent = check.name;
       nameWrap.append(icon, label);
 
-      // Плашка со статусом
       const status = document.createElement('span');
       status.className = 'check__status';
       
@@ -94,15 +84,9 @@
         status.textContent = 'Пропущено';
       }
       
-      // Показываем детали при клике на статус
       if (check.details) {
         status.style.cursor = 'pointer';
-        status.title = 'Нажмите, чтобы узнать подробности';
-        status.addEventListener('click', () => {
-          let msg = check.details;
-          if (check.sourceUrl) msg += '\n\nИсточник: ' + check.sourceUrl;
-          alert(msg);
-        });
+        status.addEventListener('click', () => alert(check.details + (check.sourceUrl ? '\n\nИсточник: ' + check.sourceUrl : '')));
       }
 
       li.append(nameWrap, status);
@@ -110,13 +94,11 @@
     });
   }
 
-  // Отрисовка всего отчета
   function renderReport(data) {
     reportQuery.textContent = data.query;
     reportMeta.textContent = 'Запрос выполнен: ' + formatDate(data.checkedAt);
     reportMessage.textContent = data.summary || 'Проверка завершена.';
     
-    // Меняем цвет плашки в зависимости от результата
     if (data.summary && data.summary.includes('предупреждения')) {
       reportStatus.className = 'chip chip--warn';
       reportStatus.textContent = 'Есть замечания';
@@ -125,6 +107,7 @@
       reportStatus.textContent = 'Проверено';
     }
 
+    renderVehicle(data.vehicle); // Рисуем карточку авто
     renderChecks(data.checks);
 
     resultEl.hidden = false;
@@ -133,7 +116,6 @@
     reportEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  // Отправка запроса на сервер
   async function submit(query) {
     clearError();
     resultEl.hidden = false;
@@ -147,14 +129,9 @@
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query })
       });
-
       const data = await res.json().catch(() => null);
+      if (!res.ok || !data || data.ok === false) throw new Error(data?.message || 'Сервис недоступен.');
 
-      if (!res.ok || !data || data.ok === false) {
-        throw new Error(data?.message || 'Сервис временно недоступен. Попробуйте позже.');
-      }
-
-      // Небольшая задержка для красоты (чтобы скелетон не мелькал)
       await new Promise(r => setTimeout(r, 300));
       renderReport(data);
     } catch (err) {
@@ -166,37 +143,24 @@
     }
   }
 
-  // Обработчик формы
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     clearError();
-
     const raw = input.value.trim();
-    if (!raw) {
-      showError('Введите VIN, кузов или госномер.');
-      return;
-    }
-
+    if (!raw) return showError('Введите данные автомобиля.');
     const value = normalize(raw);
-    if (value.length < 5) {
-      showError('Слишком короткий запрос.');
-      return;
-    }
+    if (value.length < 5) return showError('Слишком короткий запрос.');
 
     setLoading(true);
     submit(value);
   });
 
-  // Сброс ошибки при вводе
-  input.addEventListener('input', () => { 
-    if (!errorEl.hidden) clearError(); 
-  });
+  input.addEventListener('input', () => { if (!errorEl.hidden) clearError(); });
 
-  // Кнопка "Проверить другой"
   resetBtn.addEventListener('click', () => {
     resultEl.hidden = true;
     reportEl.hidden = true;
-    skeletonEl.hidden = true;
+    vehicleCard.hidden = true;
     input.value = '';
     clearError();
     input.focus();
