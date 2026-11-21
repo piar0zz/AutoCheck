@@ -1,5 +1,5 @@
 // ============================================================
-// VINCHECK — Engine v2.0 (Бесплатный тариф)
+// VINCHECK — Engine v2.5 (С информацией об авто и умным VIN)
 // ============================================================
 
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i;
@@ -26,37 +26,34 @@ function detectType(value) {
   return null;
 }
 
-async function cachedFetch(key, ttlSeconds, fetchFn) {
-  const cache = caches.default;
-  const cacheKey = new Request(`https://vincheck.internal/cache/${encodeURIComponent(key)}`);
-  let response = await cache.match(cacheKey);
-  if (response) return response.json();
-
-  const data = await fetchFn();
-  if (!data) return null;
-
-  await cache.put(cacheKey, new Response(JSON.stringify(data), {
-    headers: { 'content-type': 'application/json', 'cache-control': `max-age=${ttlSeconds}` }
-  }));
-  return data;
-}
-
-// ============================================================
-// ПРОВАЙДЕР: AvtoVinCod (Залоги, Такси, ГИБДД, Пробег)
-// ============================================================
 const AvtoVinCodProvider = {
+  // 1. Получаем базовую инфу и VIN (если ввели номер)
+  async getCarInfo(query, type, env) {
+    const token = env.AVTOVINCOD_TOKEN;
+    if (!token) return null;
+    try {
+      const param = type === 'vin' ? 'vin' : type === 'plate' ? 'plate' : 'body';
+      const url = `https://api.avtovincod.ru/info?${param}=${encodeURIComponent(query)}`;
+      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` }, signal: AbortSignal.timeout(15000) });
+      const data = await res.json();
+      
+      if (data.success === 1 && data.vehicle) {
+        return data.vehicle; // Возвращает объект { vin, mark, model, year, ... }
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  },
+
   async checkPledge(query, type, env) {
     const token = env.AVTOVINCOD_TOKEN;
     if (!token) return this.skip('Залог ФНП', 'Токен не настроен');
     const param = type === 'vin' ? 'vin' : type === 'body' ? 'body' : null;
-    if (!param) return this.skip('Залог ФНП', 'Нужен VIN или номер кузова');
-
+    if (!param) return this.skip('Залог ФНП', 'Нужен VIN или кузов');
     try {
       const url = `https://api.avtovincod.ru/pledge?${param}=${encodeURIComponent(query)}`;
-      const res = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${token}` },
-        signal: AbortSignal.timeout(15000)
-      });
+      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` }, signal: AbortSignal.timeout(15000) });
       const data = await res.json();
       if (data.active_count > 0) return { name: 'Залог ФНП', status: 'warn', details: `Действующий залог. Записей: ${data.found}`, sourceUrl: 'https://www.reestr-zalogov.ru/' };
       if (data.found > 0) return { name: 'Залог ФНП', status: 'ok', details: `Залог прекращён. Записей: ${data.found}` };
@@ -111,43 +108,59 @@ const AvtoVinCodProvider = {
   skip(name, reason) { return { name, status: 'skip', details: reason, sourceUrl: null }; }
 };
 
-// ============================================================
-// ОСНОВНОЙ ОБРАБОТЧИК
-// ============================================================
-export async function onRequestGet() {
-  return json({ ok: true, status: 'online', version: '2.0.0' });
-}
-
 export async function onRequestPost({ request, env }) {
   let body;
   try { body = await request.json(); } catch { return json({ ok: false, message: 'Некорректный JSON.' }, 400); }
 
   const normalized = normalize(body?.query);
-  const type = detectType(normalized);
+  let type = detectType(normalized);
   if (!type) return json({ ok: false, message: 'Не удалось распознать формат.' }, 422);
 
-  // Параллельный запуск всех проверок
+  let vehicle = null;
+  let searchQuery = normalized; // По умолчанию ищем по тому, что ввели
+  let searchType = type;
+
+  // Если ввели не VIN, пробуем сначала узнать VIN и инфу об авто
+  if (type !== 'vin') {
+    vehicle = await AvtoVinCodProvider.getCarInfo(normalized, type, env);
+    if (vehicle && vehicle.vin) {
+      searchQuery = vehicle.vin; // Если нашли VIN — дальше используем его!
+      searchType = 'vin';
+    }
+  } else {
+    // Если сразу ввели VIN, просто получаем инфу
+    vehicle = await AvtoVinCodProvider.getCarInfo(normalized, type, env);
+  }
+
+  // Теперь делаем все проверки (используя найденный VIN, если он был)
   const results = await Promise.allSettled([
-    AvtoVinCodProvider.checkPledge(normalized, type, env),
-    AvtoVinCodProvider.checkTaxi(normalized, type, env),
-    AvtoVinCodProvider.checkGibddHistory(normalized, type, env),
+    AvtoVinCodProvider.checkPledge(searchQuery, searchType, env),
+    AvtoVinCodProvider.checkTaxi(normalized, type, env), // Такси и ЕАИСТО можно искать и по номеру
+    AvtoVinCodProvider.checkGibddHistory(searchQuery, searchType, env),
     AvtoVinCodProvider.checkEaisto(normalized, type, env)
   ]);
 
   const checks = results.map(r => r.status === 'fulfilled' ? r.value : { name: 'Источник', status: 'skip', details: `Сбой: ${r.reason?.message || 'неизвестно'}` });
 
   const warnCount = checks.filter(c => c.status === 'warn').length;
-  const okCount = checks.filter(c => c.status === 'ok').length;
   const skipCount = checks.filter(c => c.status === 'skip').length;
 
   let summary = 'Проверка выполнена.';
   if (warnCount > 0) summary = `Обнаружены предупреждения (${warnCount}).`;
-  else if (okCount > 0) summary = `Проверено баз: ${okCount}. Проблем нет.`;
-  if (skipCount > 0) summary += ` Пропущено: ${skipCount} (нет ключа или источник недоступен).`;
+  else summary = `Проблем не обнаружено.`;
+  if (skipCount > 0) summary += ` Пропущено: ${skipCount}.`;
 
   return json({
-    ok: true, query: normalized, type,
+    ok: true, 
+    query: normalized, 
+    type,
+    vehicle: vehicle, // Отдаем инфу об авто на фронтенд
     checkedAt: new Date().toISOString(),
-    summary, checks
+    summary, 
+    checks
   });
+}
+
+export async function onRequestGet() {
+  return json({ ok: true, status: 'online' });
 }
